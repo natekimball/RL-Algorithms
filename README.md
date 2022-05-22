@@ -1,1 +1,1 @@
-# Implementation of Some Reinforcement Learning Algorithms (using JAX)
+# Implementation of Reinforcement Learning Algorithms (using JAX)
