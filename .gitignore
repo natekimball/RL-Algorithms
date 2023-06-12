@@ -2,3 +2,5 @@
 .ipynb_checkpoints
 venv
 RL_Algorithms.egg-info
+*.pyc
+.ipynb_checkpoints
