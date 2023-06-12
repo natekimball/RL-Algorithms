@@ -13,7 +13,7 @@ import optax
 import seaborn as sns
 from jax import grad, jit, lax, tree_map, value_and_grad, vjp
 from tqdm import tqdm
-
+# jax.config.update('jax_platform_name', 'cpu')
 dir_path = os.path.dirname(os.path.realpath(__file__))
 gamma = 0.9
 alpha_critic = 3e-3
