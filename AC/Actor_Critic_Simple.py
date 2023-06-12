@@ -5,24 +5,26 @@ import gymnasium as gym
 import haiku as hk
 import jax.nn as nn
 import jax.random as random
-import matplotlib.pyplot as plt
 import numpy as np
 import optax
-import seaborn as sns
 from jax import grad, jit, tree_map
 from tqdm import tqdm
-from AC.model import Actor, Critic
+
+from AC.model import policy_fn, val_fn
+from AC.plot_utils import plot_return, plot_tde
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
-gamma = 0.99
+gamma = 0.95
 alpha_critic = 3e-4
 alpha_actor = 2e-4
-episodes = 500
+episodes = 100
 num_runs = 3
 env = gym.make('LunarLander-v2')
 
 
 actor = hk.without_apply_rng(hk.transform(policy_fn))
+critic = hk.without_apply_rng(hk.transform(val_fn))
+predict = jit(critic.apply)
 
 
 def value_loss(params, obs, G):
@@ -31,8 +33,7 @@ def value_loss(params, obs, G):
     return tde**2, tde
 
 
-value_loss_grad_and_tde = jit(grad(value_loss,
-                                   has_aux=True))
+value_loss_grad_and_tde = jit(grad(value_loss, has_aux=True))
 
 
 def log_prob_action(params, obs, rng_key):
@@ -42,8 +43,7 @@ def log_prob_action(params, obs, rng_key):
     return -log_prob[a], a
 
 
-log_prob_grad_and_action = jit(grad(log_prob_action,
-                                    has_aux=True))
+log_prob_grad_and_action = jit(grad(log_prob_action, has_aux=True))
 
 actor_opt = optax.adam(alpha_actor)
 critic_opt = optax.adam(alpha_critic)
@@ -61,10 +61,6 @@ def update_actor(params, opt_state, grad):
     updates, new_opt_state = actor_opt.update(grad, opt_state)
     new_params = optax.apply_updates(params, updates)
     return new_params, new_opt_state
-
-
-critic = hk.without_apply_rng(hk.transform(val_fn))
-predict = jit(critic.apply)
 
 
 runs = []
@@ -132,27 +128,9 @@ env.close()
 runs = np.array(runs)
 runs_mean = np.mean(runs, axis=0)
 runs_std = np.std(runs, axis=0)
-
-plt.figure()
-sns.lineplot(x=np.arange(episodes), y=runs_mean)
-upper_bound = runs_mean + runs_std
-lower_bound = runs_mean - runs_std
-plt.fill_between(np.arange(episodes), upper_bound, lower_bound, alpha=0.3)
-plt.title('Actor-Critic Return')
-plt.xlabel('Episode')
-plt.ylabel('Return')
-plt.savefig(os.path.join(dir_path, 'Actor_Critic_Return.png'))
+plot_return(runs_mean, runs_std, episodes, dir_path)
 
 tdes_over_runs = np.array(tde_over_runs)
 tdes_mean = np.mean(tdes_over_runs, axis=0)
 tdes_std = np.std(tdes_over_runs, axis=0)
-
-plt.figure()
-sns.lineplot(x=np.arange(episodes), y=tdes_mean)
-upper_bound = tdes_mean + tdes_std
-lower_bound = tdes_mean - tdes_std
-plt.fill_between(np.arange(episodes), upper_bound, lower_bound, alpha=0.3)
-plt.title('Actor-Critic TD Error')
-plt.xlabel('Episode')
-plt.ylabel('Sum of TD Error')
-plt.savefig(os.path.join(dir_path, 'Actor_Critic_TD_Error.png'))
+plot_tde(tdes_mean, tdes_std, episodes, dir_path)
