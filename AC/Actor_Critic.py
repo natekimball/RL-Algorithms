@@ -3,48 +3,26 @@ import os
 import dill
 import gymnasium as gym
 import haiku as hk
-import jax
 import jax.nn as nn
-import jax.numpy as jnp
 import jax.random as random
 import matplotlib.pyplot as plt
 import numpy as np
 import optax
 import seaborn as sns
-from jax import grad, jit, lax, tree_map, value_and_grad, vjp
+from jax import grad, jit, tree_map
 from tqdm import tqdm
-# jax.config.update('jax_platform_name', 'cpu')
+from AC.model import Actor, Critic
+
 dir_path = os.path.dirname(os.path.realpath(__file__))
-gamma = 0.9
-alpha_critic = 3e-3
-alpha_actor = 1e-3
-episodes = 200
+gamma = 0.99
+alpha_critic = 3e-4
+alpha_actor = 2e-4
+episodes = 500
 num_runs = 3
 env = gym.make('LunarLander-v2')
 
 
-def mish(x: jnp.ndarray):
-    return x*jnp.tanh(nn.softplus(x))
-
-
-def policy_fn(observation):
-    mlp = hk.Sequential([
-            hk.Linear(32),
-            mish,
-            hk.Linear(32),
-            mish,
-            hk.Linear(4)])
-    return mlp(observation)
-
-
-def val_fn(observation):
-    mlp = hk.Sequential([
-        hk.Linear(32),
-        mish,
-        hk.Linear(32),
-        mish,
-        hk.Linear(1)])
-    return mlp(observation)
+actor = hk.without_apply_rng(hk.transform(policy_fn))
 
 
 def value_loss(params, obs, G):
@@ -85,7 +63,6 @@ def update_actor(params, opt_state, grad):
     return new_params, new_opt_state
 
 
-actor = hk.without_apply_rng(hk.transform(policy_fn))
 critic = hk.without_apply_rng(hk.transform(val_fn))
 predict = jit(critic.apply)
 
@@ -116,11 +93,11 @@ for run in tqdm(range(num_runs)):
                                                         obs,
                                                         rng.next())
             next_obs, reward, terminated, truncated, info = env.step(a.item())
-        
+
             eps_return += reward*I
 
             if terminated:
-                G = 0.0
+                G = reward
             else:
                 G = reward + gamma*predict(critic_params, next_obs)[0]
 
@@ -179,4 +156,3 @@ plt.title('Actor-Critic TD Error')
 plt.xlabel('Episode')
 plt.ylabel('Sum of TD Error')
 plt.savefig(os.path.join(dir_path, 'Actor_Critic_TD_Error.png'))
-
