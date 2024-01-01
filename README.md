@@ -1,4 +1,4 @@
-# Implementation of Reinforcement Learning Algorithms (using JAX)
-- [Actor-Critic](./Actor-Critic)
+# Implementation of Reinforcement Learning Algorithms in JAX
+- [Naïve Actor-Critic](./AC)
 - [REINFORCE](./REINFORCE)
-- [Deep Q-Learning] (./DQN)
+- [Deep Q-Learning](./DQN)
