@@ -31,7 +31,8 @@ gamma = 0.99
 lmda = 0.95
 epsilon = 0.2
 seed = 0
-lr = 0.01
+lr = 0.001
+ppo_epochs = 4
 
 env = gym.make('CartPole-v1')
 print('observation shape:', env.observation_space.shape)
@@ -90,9 +91,11 @@ def advantage_estimation(trajectory, params):
 
 def policy_loss(params, obs, actions, old_logits, advantages):
     logits, _ = params(obs)
-    action_dist = torch.distributions.Categorical(logits=logits)
-    old_action_dist = torch.distributions.Categorical(logits=old_logits)
-    ratio = torch.exp(action_dist.log_prob(actions) - old_action_dist.log_prob(actions))
+    log_probs = nn.functional.log_softmax(logits, dim=1)
+    old_log_probs = nn.functional.log_softmax(old_logits.reshape(-1,2), dim=1)
+    log_probs = log_probs.gather(1, actions.unsqueeze(1)).squeeze()
+    old_log_probs = old_log_probs.gather(1, actions.unsqueeze(1)).squeeze()
+    ratio = torch.exp(log_probs - old_log_probs)
     clipped_ratio = torch.clamp(ratio, 1 - epsilon, 1 + epsilon)
     surrogate = torch.min(ratio * advantages, clipped_ratio * advantages)
     return -torch.mean(surrogate)
@@ -147,10 +150,26 @@ mean_returns = []
 for step in range(1, steps + 1):
     traj = unroll_policy(neural_net, T=unroll_size)
     advantage = advantage_estimation(traj, neural_net)
-    for i in range(0, unroll_size, mini_size):
-        mini_traj = traj[i:i + mini_size]
-        mini_adv = advantage[i:i + mini_size]
-        update(neural_net, optimizer, mini_traj, mini_adv)
+
+    for _ in range(ppo_epochs):
+        # Shuffle data for better learning
+        indices = np.arange(unroll_size)
+        np.random.shuffle(indices)
+        
+        # Process mini-batches
+        for start in range(0, unroll_size, mini_size):
+            end = start + mini_size
+            if end <= unroll_size:
+                idx = indices[start:end]
+                mini_traj = [traj[i] for i in idx]
+                mini_adv = advantage[idx]
+                update(neural_net, optimizer, mini_traj, mini_adv)
+
+    # for _ in range(ppo_epochs):
+    #     for i in range(0, unroll_size, mini_size):
+    #         mini_traj = traj[i:i + mini_size]
+    #         mini_adv = advantage[i:i + mini_size]
+    #         update(neural_net, optimizer, mini_traj, mini_adv)
 
     if step % eval_freq == 0:
         mean_ret = evaluate(neural_net)
@@ -179,6 +198,7 @@ while not terminated and not truncated:
     action, _ = policy(neural_net, obs)
     obs, _, terminated, truncated, _ = test_env.step(action)
 test_env.close()
+
 
 # import os
 # import pickle
@@ -212,7 +232,10 @@ test_env.close()
 # lmda = 0.95
 # epsilon = 0.2
 # seed = 0
-# lr = 0.01
+# lr = 0.0003
+# n_epochs = 4
+# value_coeff = 0.5
+# entropy_coeff = 0.01
 
 # torch.manual_seed(seed)
 
@@ -247,48 +270,72 @@ test_env.close()
 #     rewards = torch.tensor([t.rew for t in trajectory], dtype=torch.float32)
 #     terminated = torch.tensor([t.terminated for t in trajectory], dtype=torch.float32)
     
-#     _, values = params(obs)
-#     _, next_values = params(next_obs)
-#     values, next_values = values.squeeze(), next_values.squeeze()
+#     with torch.no_grad():
+#         _, values = params(obs)
+#         _, next_values = params(next_obs)
+#         values, next_values = values.squeeze(), next_values.squeeze()
+        
+#         deltas = rewards + gamma * next_values * (1 - terminated) - values
+#         advantages = torch.zeros_like(rewards)
+#         adv = 0
+#         for t in reversed(range(len(trajectory))):
+#             adv = deltas[t] + gamma * lmda * (1 - terminated[t]) * adv
+#             advantages[t] = adv
+        
+#         # Normalize advantages - critical for stable training
+#         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
     
-#     deltas = rewards + gamma * next_values * (1 - terminated) - values
-#     advantages = torch.zeros_like(rewards)
-#     adv = 0
-#     for t in reversed(range(len(trajectory))):
-#         adv = deltas[t] + gamma * lmda * (1 - terminated[t]) * adv
-#         advantages[t] = adv
-#     return advantages
+#     returns = advantages + values  # For value function training
+#     return advantages, returns
 
-# def ppo_loss(params, batch, advantages):
+# def ppo_loss(params, batch, advantages, returns):
 #     obs = torch.tensor(batch['obs'], dtype=torch.float32)
 #     actions = torch.tensor(batch['actions'], dtype=torch.long)
 #     old_logits = torch.tensor(batch['logits'], dtype=torch.float32)
     
 #     logits, values = params(obs)
-#     new_log_probs = torch.log_softmax(logits, dim=1)
-#     old_log_probs = torch.log_softmax(old_logits, dim=1)
+#     values = values.squeeze()
     
-#     ratio = torch.exp(new_log_probs.gather(1, actions.unsqueeze(1)) - old_log_probs.squeeze(1).gather(1, actions.unsqueeze(1)))
-#     clipped_ratio = torch.clamp(ratio, 1 - epsilon, 1 + epsilon)
-#     surrogate = torch.min(ratio * advantages, clipped_ratio * advantages)
-#     policy_loss = -torch.mean(surrogate)
-    
-#     value_loss = torch.mean((values.squeeze() - (advantages + values.squeeze().detach())) ** 2)
-#     return policy_loss + 0.5 * value_loss
+#     # Policy loss with proper log prob calculation
+#     log_probs = nn.functional.log_softmax(logits, dim=1)
+#     old_log_probs = nn.functional.log_softmax(old_logits.reshape(-1,2), dim=1)
 
-# def update(params, optimizer, traj_segment, advantage_segment):
+#     log_probs = log_probs.gather(1, actions.unsqueeze(1)).squeeze()
+#     old_log_probs = old_log_probs.gather(1, actions.unsqueeze(1)).squeeze()
+    
+#     ratio = torch.exp(log_probs - old_log_probs)
+#     surrogate1 = ratio * advantages
+#     surrogate2 = torch.clamp(ratio, 1 - epsilon, 1 + epsilon) * advantages
+#     policy_loss = -torch.min(surrogate1, surrogate2).mean()
+    
+#     # Value loss
+#     value_loss = value_coeff * ((values - returns) ** 2).mean()
+    
+#     # Entropy bonus for exploration
+#     # entropy = dist.entropy().mean()
+    
+#     # Total loss
+#     loss = policy_loss + value_loss #- entropy_coeff * entropy
+    
+#     return loss, policy_loss, value_loss#, entropy
+
+# def update(params, optimizer, traj_segment, advantages, returns):
 #     batch = {
 #         'obs': np.array([t.obs for t in traj_segment]),
 #         'actions': np.array([t.act for t in traj_segment]),
 #         'logits': np.array([t.logits for t in traj_segment]),
 #     }
     
-#     advantages  = advantage_segment.detach()
-#     loss = ppo_loss(params, batch, advantages)
+#     # loss, policy_loss, value_loss, entropy = ppo_loss(params, batch, advantages, returns)
+#     loss, policy_loss, value_loss = ppo_loss(params, batch, advantages, returns)
     
 #     optimizer.zero_grad()
 #     loss.backward()
+#     # Add gradient clipping for stability
+#     torch.nn.utils.clip_grad_norm_(params.parameters(), max_norm=0.5)
 #     optimizer.step()
+    
+#     return loss.item(), policy_loss.item(), value_loss.item()#, entropy.item()
 
 # def evaluate(params, num_eps=10):
 #     env_eval = wrappers.RecordEpisodeStatistics(env)
@@ -312,9 +359,23 @@ test_env.close()
 
 # for step in range(1, steps + 1):
 #     traj = unroll_policy(neural_net, T=unroll_size)
-#     advantages = compute_advantages(traj, neural_net)
-#     for i in range(0, unroll_size, mini_size):
-#         update(neural_net, optimizer, traj[i:i + mini_size], advantages[i:i + mini_size])
+#     advantages, returns = compute_advantages(traj, neural_net)
+    
+#     # Multiple optimization epochs over the same data
+#     for _ in range(n_epochs):
+#         # Shuffle data for better learning
+#         indices = np.arange(unroll_size)
+#         np.random.shuffle(indices)
+        
+#         # Process mini-batches
+#         for start in range(0, unroll_size, mini_size):
+#             end = start + mini_size
+#             if end <= unroll_size:
+#                 idx = indices[start:end]
+#                 mini_traj = [traj[i] for i in idx]
+#                 mini_adv = advantages[idx]
+#                 mini_ret = returns[idx]
+#                 update(neural_net, optimizer, mini_traj, mini_adv, mini_ret)
 
 #     if step % eval_freq == 0:
 #         mean_ret = evaluate(neural_net)
@@ -326,7 +387,7 @@ test_env.close()
 #         print(f'step: {step}, mean return: {mean_ret}')
 #         torch.save({'model_state_dict': best_params, 'optimizer_state_dict': optimizer.state_dict()}, f'checkpoints/ckpt_{step}.pth')
 
-# torch.save({'model_state_dict': best_params, 'optimizer_state_dict': optimizer.state_dict()}, 'checkpoints/ckpt_last.pth')
+# torch.save({'mel_state_dict': best_params, 'optimizer_state_dict': optimizer.state_dict()}, 'checkpoints/ckpt_last.pth')
 # plt.figure()
 # plt.plot(eval_steps, mean_returns, label='mean returns')
 # plt.legend()
